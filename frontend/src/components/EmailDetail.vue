@@ -24,10 +24,16 @@
 
       <!-- 切换：AI 总结 | 原邮件 -->
       <div class="toggle-bar">
-        <el-radio-group v-model="viewMode" size="small">
-          <el-radio-button value="ai">🤖 AI 总结</el-radio-button>
-          <el-radio-button value="raw">📧 原邮件</el-radio-button>
-        </el-radio-group>
+        <el-button
+          :type="viewMode === 'ai' ? 'primary' : ''"
+          size="small"
+          @click="viewMode = 'ai'"
+        >🤖 AI 总结</el-button>
+        <el-button
+          :type="viewMode === 'raw' ? 'primary' : ''"
+          size="small"
+          @click="viewMode = 'raw'"
+        >📧 原邮件</el-button>
       </div>
 
       <!-- AI 总结 -->
@@ -58,6 +64,7 @@
       </div>
 
       <!-- 原邮件 -->
+
       <div v-else class="detail-content">
         <div class="email-meta">
           <div><strong>发件人：</strong>{{ email.from }}</div>
@@ -65,7 +72,10 @@
           <div v-if="email.cc?.length"><strong>抄送：</strong>{{ formatRecipients(email.cc) }}</div>
           <div><strong>日期：</strong>{{ formatFullDate(email.date) }}</div>
         </div>
-        <div class="email-body">
+        <!-- HTML 渲染 -->
+        <div v-if="email.bodyHtml" class="email-body-html" v-html="email.bodyHtml"></div>
+        <!-- 纯文本回退 -->
+        <div v-else class="email-body">
           <pre>{{ email.bodyText || email.bodyPreview || '(无正文)' }}</pre>
         </div>
       </div>
@@ -112,7 +122,9 @@ function formatDate(d) {
   return t.toLocaleDateString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
 }
 function formatRecipients(list) {
-  if (!list || !list.length) return '-';
+  if (!list) return '-';
+  if (typeof list === 'string') return list;
+  if (!Array.isArray(list) || !list.length) return '-';
   return list.map((r) => r.name || r.email || r).join('; ');
 }
 function formatFullDate(d) {
@@ -157,13 +169,19 @@ function catTagType(c) {
 .summary-block p { margin: 0; line-height: 1.8; color: #303133; font-size: 14px; }
 .keywords-block { display: flex; gap: 6px; flex-wrap: wrap; }
 .email-meta { margin-bottom: 14px; font-size: 13px; color: #606266; line-height: 2; }
-.email-body {
-  background: #fafafa; border: 1px solid #ebeef5; border-radius: 6px;
-  padding: 14px; max-height: calc(100vh - 380px); overflow-y: auto;
-}
 .email-body pre {
   margin: 0; white-space: pre-wrap; word-break: break-word;
   font-family: inherit; font-size: 13px; line-height: 1.7; color: #303133;
+}
+.email-body-html {
+  max-height: calc(100vh - 380px); overflow-y: auto;
+  font-size: 13px; line-height: 1.7; color: #303133;
+}
+.email-body-html :deep(img) { max-width: 100%; }
+.email-body-html :deep(a) { color: #409EFF; }
+.email-body {
+  background: #fafafa; border: 1px solid #ebeef5; border-radius: 6px;
+  padding: 14px; max-height: calc(100vh - 380px); overflow-y: auto;
 }
 .attachments { padding: 12px 20px; border-top: 1px solid #ebeef5; }
 .attach-title { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 8px; }

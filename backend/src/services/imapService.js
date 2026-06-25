@@ -44,7 +44,7 @@ function fetchEmailsViaImap(config) {
           return resolve([]);
         }
 
-        // 获取完整邮件源码，用 mailparser 正确解码
+        // 获取完整源码，用 mailparser 正确解析 MIME
         const fetch = imap.seq.fetch(`${startSeq}:*`, {
           bodies: '',
           struct: true,
@@ -65,64 +65,40 @@ function fetchEmailsViaImap(config) {
 
           msg.once('end', async () => {
             try {
-              // 使用 mailparser 解析完整邮件 (自动处理 MIME 解码)
               const parsed = await simpleParser(rawSource);
 
-              const fromName = parsed.from?.text || '';
-              const fromEmail = (parsed.from?.value || [])[0]?.address || '';
-              const fromStr = fromName
-                ? `${fromName} <${fromEmail}>`
-                : fromEmail || '未知';
+              const h = parseImapHeader(rawSource);
+              const fromStr = decodeMimeWords(h.from) || '未知';
+              const toStr = decodeMimeWords(h.to) || '';
+              const subject = decodeMimeWords(h.subject) || '(无主题)';
 
-              const toStr = (parsed.to || [])
-                .map((a) => a.text ? `${a.text} <${(a.value||[])[0]?.address||''}>` : (a.value||[])[0]?.address||'')
-                .filter(Boolean)
-                .join(', ') || '';
+              // parsed.text = text/plain 部分, parsed.html = text/html 部分
+              const plainText = parsed.text || '';
+              const htmlBody = parsed.html || '';
 
-              // 提取纯文本正文
-              let bodyFull = parsed.text || '';
-              if (!bodyFull && parsed.html) {
-                bodyFull = parsed.html
-                  .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-                  .replace(/<br\s*\/?>/gi, '\n')
-                  .replace(/<\/p>/gi, '\n')
-                  .replace(/<\/div>/gi, '\n')
-                  .replace(/<[^>]+>/g, '')
-                  .replace(/&nbsp;/g, ' ')
-                  .replace(/&lt;/g, '<')
-                  .replace(/&gt;/g, '>')
-                  .replace(/&amp;/g, '&')
-                  .replace(/&quot;/g, '"')
-                  .replace(/\n{3,}/g, '\n\n')
-                  .trim();
-              }
-
+              // 正文：优先文本，其次 HTML 去标签
+              const bodyFull = plainText || stripHtml(htmlBody);
               const bodyPreview = bodyFull.substring(0, 500);
 
               emails.push({
-                uid: msg.attrs?.uid || seqno,
-                seqno,
-                from: fromStr,
-                to: toStr,
-                subject: parsed.subject || '(无主题)',
-                date: parsed.date ? parsed.date.toISOString() : '',
-                bodyPreview,
-                bodyFull,
+                uid: msg.attrs?.uid || seqno, seqno,
+                from: fromStr, to: toStr,
+                subject, date: h.date || '',
+                bodyPreview, bodyFull,
+                bodyHtml: htmlBody,
                 hasAttachments: !!(parsed.attachments || []).length,
                 flags: msg.attrs?.flags || [],
               });
-            } catch (_parseErr) {
-              // mailparser 解析失败时回退到简单解析
-              const parsed = parseImapHeader(rawSource);
+            } catch (_) {
+              const h = parseImapHeader(rawSource);
               emails.push({
-                uid: msg.attrs?.uid || seqno,
-                seqno,
-                from: decodeMimeWords(parsed.from) || '未知',
-                to: decodeMimeWords(parsed.to) || '',
-                subject: decodeMimeWords(parsed.subject) || '(无主题)',
-                date: parsed.date || '',
+                uid: msg.attrs?.uid || seqno, seqno,
+                from: decodeMimeWords(h.from) || '未知',
+                to: decodeMimeWords(h.to) || '',
+                subject: decodeMimeWords(h.subject) || '(无主题)',
+                date: h.date || '',
                 bodyPreview: rawSource.substring(0, 500),
-                bodyFull: rawSource,
+                bodyFull: '', bodyHtml: '',
                 hasAttachments: false,
                 flags: msg.attrs?.flags || [],
               });
@@ -181,34 +157,42 @@ function parseImapHeader(header) {
 }
 
 /**
- * 解码 MIME 编码字词 (RFC 2047)
- * 例: =?UTF-8?B?5L2g5aW9?= → 你好
- *     =?ISO-2022-JP?B?GyRCJCIkJCQmJCgkKhsoQg==?= → 日本語
+ * HTML 转纯文本
+ */
+function stripHtml(html) {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * 解码 MIME 编码字词 (RFC 2047) 例: =?UTF-8?B?xxx?= → 中文
  */
 function decodeMimeWords(text) {
   if (!text) return text;
-
-  // 正则匹配 =?charset?encoding?encoded_text?=
   return text.replace(
     /=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g,
-    (_match, charset, encoding, encodedText) => {
+    (_m, charset, enc, str) => {
       try {
-        let bytes;
-        if (encoding.toUpperCase() === 'B') {
-          bytes = Buffer.from(encodedText, 'base64');
-        } else {
-          // Q 编码: _→空格, =XX→十六进制
-          const qText = encodedText
-            .replace(/_/g, ' ')
-            .replace(/=([0-9A-Fa-f]{2})/g, (_m, hex) =>
-              String.fromCharCode(parseInt(hex, 16))
-            );
-          bytes = Buffer.from(qText, 'binary');
+        let buf;
+        if (enc.toUpperCase() === 'B') buf = Buffer.from(str, 'base64');
+        else {
+          const q = str.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+          buf = Buffer.from(q, 'binary');
         }
-        return bytes.toString('utf-8');
-      } catch (_e) {
-        return encodedText;
-      }
+        return buf.toString('utf-8');
+      } catch (_) { return str; }
     }
   );
 }

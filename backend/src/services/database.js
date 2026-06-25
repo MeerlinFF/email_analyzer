@@ -53,9 +53,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_emails_category ON emails(ai_category);
 `);
 
-// 兼容旧表：添加 body_full 列 (如果不存在)
+// 兼容旧表：添加 body_full 和 body_html 列
 try {
   db.exec('ALTER TABLE emails ADD COLUMN body_full TEXT DEFAULT \'\'');
+} catch (_) { /* 列已存在 */ }
+try {
+  db.exec('ALTER TABLE emails ADD COLUMN body_html TEXT DEFAULT \'\'');
 } catch (_) { /* 列已存在 */ }
 
 db.exec(`

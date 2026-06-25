@@ -28,8 +28,13 @@ function saveEmails(emails, source = 'imap') {
         source,
       });
       // 同时存储完整正文
+      // 同时存储完整正文
       if (email.bodyFull) {
         saveRawBody(String(email.uid || email.seqno || ''), email.bodyFull);
+      }
+      if (email.bodyHtml) {
+        const { db } = require('./database');
+        db.prepare('UPDATE emails SET body_html = @html WHERE uid = @uid').run({ uid: String(email.uid || email.seqno || ''), html: email.bodyHtml });
       }
       inserted++;
     } catch (err) {
@@ -125,6 +130,8 @@ function formatEmailRow(row) {
     subject: row.subject,
     date: row.date,
     bodyPreview: row.body_preview,
+    bodyText: row.body_full || row.body_preview,
+    bodyHtml: row.body_html || '',
     hasAttachments: !!row.has_attachments,
     flags: safeJsonParse(row.flags, []),
     analysis: {

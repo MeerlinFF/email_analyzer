@@ -1,5 +1,15 @@
 <template>
-  <el-card v-if="taskId" class="steps-card" shadow="never">
+  <!-- 内联模式：header 中的精简进度 -->
+  <div v-if="inline && taskId" class="inline-steps">
+    <el-icon :color="statusIcon.color" :class="{ 'is-loading': statusIcon.loading }">
+      <component :is="statusIcon.icon" />
+    </el-icon>
+    <el-progress :percentage="progress" :stroke-width="4" :show-text="false" style="width:100px" />
+    <el-tag :type="statusTagType" size="small">{{ statusLabel }}</el-tag>
+  </div>
+
+  <!-- 完整卡片模式 -->
+  <el-card v-else-if="taskId" class="steps-card" shadow="never">
     <template #header>
       <div class="card-header">
         <span class="card-title">
@@ -60,6 +70,7 @@ const props = defineProps({
   steps: { type: Array, default: () => [] },
   status: { type: String, default: '' },
   progress: { type: Number, default: 0 },
+  inline: { type: Boolean, default: false },
 });
 
 const statusTagType = computed(() => {
@@ -101,6 +112,9 @@ function getStepStatus(s) {
 </script>
 
 <style scoped>
+.inline-steps {
+  display: flex; align-items: center; gap: 8px;
+}
 .steps-card {
   margin-bottom: 24px;
 }

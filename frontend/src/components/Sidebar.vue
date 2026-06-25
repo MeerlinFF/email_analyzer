@@ -9,7 +9,7 @@
       <el-upload
         :show-file-list="false"
         accept=".eml"
-        :http-request="$emit('uploadEml', $event)"
+        :http-request="handleUpload"
       >
         <el-button size="small" class="upload-btn">
           <el-icon><Upload /></el-icon>
@@ -65,16 +65,17 @@ const props = defineProps({
   categoryCounts: { type: Object, default: () => ({}) },
 });
 
-defineEmits(['selectCategory', 'fetch', 'uploadEml', 'openSettings']);
+const emit = defineEmits(['selectCategory', 'fetch', 'uploadEml', 'openSettings']);
+function handleUpload(req) { emit('uploadEml', req); }
 
 const categories = computed(() => [
-  { key: '工作/商务', label: '工作',  icon: Briefcase,   tagType: '',        count: props.categoryCounts['工作/商务'] || 0 },
+  { key: '工作/商务', label: '工作',  icon: Briefcase,   tagType: 'primary',  count: props.categoryCounts['工作/商务'] || 0 },
   { key: '个人/私人', label: '个人',  icon: Key,          tagType: 'info',     count: props.categoryCounts['个人/私人'] || 0 },
   { key: '通知/公告', label: '通知',  icon: Notification, tagType: 'warning',  count: props.categoryCounts['通知/公告'] || 0 },
   { key: '财务/账单', label: '财务',  icon: Money,        tagType: 'danger',   count: props.categoryCounts['财务/账单'] || 0 },
   { key: '推广/营销', label: '推广',  icon: ShoppingBag,  tagType: 'warning',  count: props.categoryCounts['推广/营销'] || 0 },
   { key: '会议/日程', label: '会议',  icon: Calendar,     tagType: 'success',  count: props.categoryCounts['会议/日程'] || 0 },
-  { key: '技术支持', label: '技术',  icon: Setting,      tagType: '',         count: props.categoryCounts['技术支持'] || 0 },
+  { key: '技术支持', label: '技术',  icon: Setting,      tagType: 'primary',  count: props.categoryCounts['技术支持'] || 0 },
   { key: '紧急/重要', label: '紧急',  icon: Warning,      tagType: 'danger',   count: props.categoryCounts['紧急/重要'] || 0 },
   { key: '其他',     label: '其他',  icon: Message,      tagType: 'info',     count: props.categoryCounts['其他'] || 0 },
 ]);

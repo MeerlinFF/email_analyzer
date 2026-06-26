@@ -15,9 +15,12 @@
           :progress="analysisProgress"
           inline
         />
-        <el-button type="primary" size="small" @click="startFetchNew">
+        <el-button type="primary" @click="startFetchNew(1)">
+          拉取单封新邮件
+        </el-button>
+        <el-button @click="startFetchNew(fetchLimit)">
           <el-icon><Download /></el-icon>
-          拉取新邮件
+          拉取多封邮件
         </el-button>
       </div>
     </header>
@@ -30,9 +33,10 @@
         :total-count="allEmails.length"
         :category-counts="categoryCounts"
         @select-category="handleSelectCategory"
-        @fetch="handleFetch"
+        @fetch="startFetchNew"
         @upload-eml="handleEmlUpload"
         @open-settings="showSettings = true"
+        @clear-all="handleClearAll"
       />
 
       <!-- 中栏：邮件列表 -->
@@ -64,6 +68,7 @@
     <!-- 拉取日志弹窗 -->
     <FetchLogDialog
       v-model:visible="showFetchLog"
+      :limit="currentFetchSize"
       @done="loadEmails"
     />
   </div>
@@ -71,7 +76,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Message, Setting, Download } from '@element-plus/icons-vue';
 import Sidebar from './components/Sidebar.vue';
 import EmailList from './components/EmailList.vue';
@@ -79,10 +84,10 @@ import EmailDetail from './components/EmailDetail.vue';
 import AnalysisSteps from './components/AnalysisSteps.vue';
 import SettingsDialog from './components/SettingsDialog.vue';
 import FetchLogDialog from './components/FetchLogDialog.vue';
+import http from './api';
 import {
   uploadAndAnalyze, getAnalysisResult,
-  fetchImapEmails, fetchStoredEmails,
-  fetchSettings, fetchRawEmail,
+  fetchStoredEmails, fetchSettings, fetchRawEmail,
 } from './api';
 import { exportToJson } from './utils/export';
 
@@ -93,6 +98,8 @@ const activeCategory = ref('all');
 const appSettings = ref({});
 const showSettings = ref(false);
 const showFetchLog = ref(false);
+const currentFetchSize = ref(1);
+const fetchLimit = ref(20);
 
 const currentTaskId = ref(null);
 const analysisSteps = ref([]);
@@ -129,7 +136,10 @@ onMounted(async () => {
 async function loadSettings() {
   try {
     const res = await fetchSettings();
-    if (res.success) appSettings.value = res.settings;
+    if (res.success) {
+      appSettings.value = res.settings;
+      fetchLimit.value = parseInt(res.settings.fetch_limit || '20', 10);
+    }
   } catch (err) { console.warn('加载设置失败:', err.message); }
 }
 
@@ -143,20 +153,6 @@ async function loadEmails() {
 function handleSelectCategory(category) {
   activeCategory.value = category;
   selectedEmail.value = null;
-}
-
-async function handleFetch() {
-  imapLoading.value = true;
-  try {
-    const data = await fetchImapEmails({});
-    allEmails.value = data.emails || [];
-    const msg = data.newCount > 0
-      ? `获取成功: ${allEmails.value.length} 封 (新增 ${data.newCount} 封)`
-      : `已同步 ${allEmails.value.length} 封 (无新增)`;
-    ElMessage.success(msg);
-  } catch (err) {
-    ElMessage.error('获取失败: ' + (err.response?.data?.message || err.message));
-  } finally { imapLoading.value = false; }
 }
 
 async function handleEmlUpload({ file }) {
@@ -226,7 +222,24 @@ function handleAnalysisResult(result) {
   loadEmails();
 }
 
-function startFetchNew() { showFetchLog.value = true; }
+function startFetchNew(limit) {
+  if (limit) currentFetchSize.value = limit;
+  showFetchLog.value = true;
+}
+
+async function handleClearAll() {
+  try {
+    await ElMessageBox.confirm('确定清空所有邮件数据？此操作不可撤销。', '确认清空', {
+      type: 'error', confirmButtonText: '清空', cancelButtonText: '取消',
+    });
+    await http.delete('/emails/all');
+    allEmails.value = [];
+    selectedEmail.value = null;
+    ElMessage.success('系统已清空');
+  } catch (err) {
+    if (err !== 'cancel') ElMessage.error('清空失败');
+  }
+}
 
 function openDetail(email) { selectedEmail.value = email; }
 

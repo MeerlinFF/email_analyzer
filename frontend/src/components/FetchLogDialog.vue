@@ -47,6 +47,7 @@ import { Loading } from '@element-plus/icons-vue';
 
 const props = defineProps({
   visible: Boolean,
+  limit: { type: Number, default: 1 },
 });
 
 const emit = defineEmits(['update:visible', 'done']);
@@ -65,7 +66,7 @@ function startFetch() {
 
   if (eventSource) eventSource.close();
 
-  eventSource = new EventSource('/api/imap/fetch-new/stream');
+  eventSource = new EventSource(`/api/imap/fetch-new/stream?limit=${props.limit}`);
 
   eventSource.onmessage = (event) => {
     const data = JSON.parse(event.data);

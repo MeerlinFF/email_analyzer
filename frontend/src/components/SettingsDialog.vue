@@ -32,7 +32,7 @@
           </el-form-item>
           <el-form-item label="拉取数量">
             <el-input-number v-model="imap.limit" :min="5" :max="200" :step="5" />
-            <span class="form-tip">每次拉取最近 N 封邮件</span>
+            <span class="form-tip">「拉取多封」时 AI 分析的邮件数量</span>
           </el-form-item>
           <el-alert
             title="提示"

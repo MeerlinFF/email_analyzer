@@ -215,6 +215,17 @@ router.delete('/emails', (req, res) => {
   }
 });
 
+// ─── DELETE /api/emails/all ──────────────────────────
+router.delete('/emails/all', (_req, res) => {
+  try {
+    const { db } = require('../services/database');
+    const result = db.prepare('DELETE FROM emails').run();
+    res.json({ success: true, deleted: result.changes, message: `已清空 ${result.changes} 封邮件` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ─── GET /api/settings ──────────────────────────────
 router.get('/settings', (_req, res) => {
   try {
@@ -263,7 +274,7 @@ router.post('/imap/fetch', async (req, res) => {
     const emails = await fetchEmailsViaImap(imapConfig);
 
     const savedCount = saveEmails(emails, 'imap');
-    console.log(`📥 IMAP 获取 ${emails.length} 封，新增入库 ${savedCount} 封`);
+    console.log('📥 IMAP 获取 ' + emails.length + ' 封，新增入库 ' + savedCount + ' 封');
     const allEmails = getAllEmails();
 
     res.json({
@@ -282,12 +293,14 @@ router.post('/imap/fetch', async (req, res) => {
 
 // ─── GET /api/imap/fetch-new/stream ──────────────────
 // 增量拉取 + AI 分析 + SSE 实时日志
+// ?limit=1  单封模式：扫描最新 100 封，找到最新未入库的 1 封
+// ?limit=N  多封模式：拉最新 N 封，分析所有未入库的
 router.get('/imap/fetch-new/stream', async (req, res) => {
-  const { fetchEmailsViaImap } = require('../services/imapService');
-  const { analyzeEmail } = require('../services/aiService');
-  const settings = getSettings();
+  var fetchLimit = parseInt(req.query.limit || '1', 10);
+  var { fetchEmailsViaImap } = require('../services/imapService');
+  var { analyzeEmail } = require('../services/aiService');
+  var settings = getSettings();
 
-  // 设置 SSE
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -295,107 +308,121 @@ router.get('/imap/fetch-new/stream', async (req, res) => {
     'X-Accel-Buffering': 'no',
   });
 
-  function sendLog(message) {
-    res.write(`data: ${JSON.stringify({ log: message })}\n\n`);
-  }
-  function sendDone(success, message, count) {
-    res.write(`data: ${JSON.stringify({ done: true, success, message, count })}\n\n`);
+  function sendLog(msg) { res.write('data: ' + JSON.stringify({ log: msg }) + '\n\n'); }
+  function sendDone(success, msg, count) {
+    res.write('data: ' + JSON.stringify({ done: true, success: success, message: msg, count: count }) + '\n\n');
     res.end();
   }
 
   try {
+    if (!settings.imap_user || !settings.imap_password) {
+      return sendDone(false, '请先在设置中配置邮箱地址和授权码', 0);
+    }
+
     sendLog('🔌 正在连接 QQ 邮箱...');
 
-    const limit = parseInt(settings.fetch_limit || '20', 10) + 10; // 多拉一些做比较
-    const imapConfig = {
+    // 共同 IMAP 配置
+    var imapCfg = {
       host: settings.imap_host || 'imap.qq.com',
       port: parseInt(settings.imap_port || '993', 10),
       user: settings.imap_user,
       password: settings.imap_password,
       tls: (settings.imap_tls || 'true') !== 'false',
-      limit,
     };
 
-    if (!imapConfig.user || !imapConfig.password) {
-      return sendDone(false, '请先在设置中配置邮箱地址和授权码', 0);
+    // ═══ 单封模式 ═══
+    if (fetchLimit === 1) {
+      // SEARCH 最近 365 天的邮件，取最新 200 封，本地按日期排序找第一封未入库的
+      var batch = await fetchEmailsViaImap(Object.assign({}, imapCfg, { limit: 200, sinceDays: 365 }));
+
+      if (batch.length === 0) return sendDone(true, '邮箱为空', 0);
+
+      sendLog('📥 已获取最新 ' + batch.length + ' 封，查找未入库的...');
+
+      // batch 已按日期从新到旧排序，找到第一个不在库中的
+      var found = null;
+      for (var i = 0; i < batch.length; i++) {
+        var candidate = batch[i];
+        var cUid = String(candidate.uid || candidate.seqno || '');
+        if (!getEmailByUid(cUid)) {
+          found = candidate;
+          break;
+        }
+      }
+
+      if (!found) {
+        return sendDone(true, '最新 ' + batch.length + ' 封已全部入库，没有新邮件', 0);
+      }
+
+      // 只分析这一封
+      var uid = String(found.uid || found.seqno || '');
+      sendLog('📧 ' + (found.subject || '(无主题)').substring(0, 40));
+      sendLog('🤖 AI 分析中...');
+      saveEmails([found], 'imap');
+      if (found.bodyFull) saveRawBody(uid, found.bodyFull);
+      var analysis = await analyzeEmail(
+        { from: { name: found.from, email: '' }, subject: found.subject, date: found.date, bodyText: found.bodyFull || found.bodyPreview || '' },
+        []
+      );
+      sendLog('📊 ' + analysis.category + ' | ' + analysis.sentiment + ' | ' + analysis.priority);
+      sendLog('📝 ' + (analysis.summary || '').substring(0, 80));
+      attachAnalysis(uid, analysis);
+      sendLog('✅ 完成！');
+      return sendDone(true, '已拉取并分析 1 封新邮件', 1);
     }
 
-    const emails = await fetchEmailsViaImap(imapConfig);
-    sendLog(`📥 IMAP 获取到 ${emails.length} 封邮件，正在筛选新邮件...`);
+    // ═══ 多封模式 ═══
+    var emails = await fetchEmailsViaImap(Object.assign({}, imapCfg, { limit: fetchLimit, sinceDays: 365 }));
 
-    // 筛选数据库中不存在的
-    const newEmails = [];
-    for (const email of emails) {
-      const uid = String(email.uid || email.seqno || '');
-      const existing = getEmailByUid(uid);
-      if (!existing) newEmails.push(email);
+    sendLog('📥 获取最新 ' + emails.length + ' 封，筛选中...');
+
+    // 筛出未入库的（保持从新到旧顺序）
+    var newEmails = [];
+    for (var k = 0; k < emails.length; k++) {
+      var e = emails[k];
+      if (!getEmailByUid(String(e.uid || e.seqno || ''))) {
+        newEmails.push(e);
+      }
     }
 
-    sendLog(`🆕 发现 ${newEmails.length} 封新邮件`);
+    if (newEmails.length === 0) return sendDone(true, '没有新邮件', 0);
 
-    if (newEmails.length === 0) {
-      return sendDone(true, '没有新邮件', 0);
-    }
+    sendLog('🆕 ' + newEmails.length + ' 封未入库，开始 AI 分析...');
 
-    // 逐封分析
-    let analyzedCount = 0;
-    for (let i = 0; i < newEmails.length; i++) {
-      const email = newEmails[i];
-      const uid = String(email.uid || email.seqno || '');
-      const label = email.subject
-        ? email.subject.substring(0, 40)
-        : '(无主题)';
+    var analyzedCount = 0;
+    for (var n = 0; n < newEmails.length; n++) {
+      var email = newEmails[n];
+      var eUid = String(email.uid || email.seqno || '');
+      var label = (email.subject || '(无主题)').substring(0, 40);
 
-      sendLog(`\n[${i + 1}/${newEmails.length}] 📧 ${label}`);
+      sendLog('\n[' + (n + 1) + '/' + newEmails.length + '] 📧 ' + label);
+      sendLog('  🤖 AI 分析中...');
 
       try {
-        // 构造 EML 给 simpleParser
-        const emlContent = [
-          `From: ${email.from}`,
-          `To: ${email.to}`,
-          `Subject: ${email.subject}`,
-          `Date: ${email.date}`,
-          'Content-Type: text/plain; charset=utf-8',
-          '',
-          email.bodyFull || email.bodyPreview || '',
-        ].join('\r\n');
-
-        // 保存邮件到 DB
         saveEmails([email], 'imap');
-        if (email.bodyFull) {
-          saveRawBody(uid, email.bodyFull);
-        }
-        sendLog('  💾 已保存到数据库');
+        if (email.bodyFull) saveRawBody(eUid, email.bodyFull);
 
-        // AI 分析
-        sendLog('  🤖 AI 分析中...');
-        const emailData = {
-          from: { name: email.from, email: '' },
-          subject: email.subject,
-          date: email.date,
-          bodyText: email.bodyFull || email.bodyPreview || '',
-        };
-
-        const analysis = await analyzeEmail(emailData, []);
-        sendLog(`  📊 分类: ${analysis.category} | ${analysis.sentiment} | 优先级: ${analysis.priority}`);
-        sendLog(`  📝 ${(analysis.summary || '').substring(0, 80)}`);
-
-        attachAnalysis(uid, analysis);
+        var result = await analyzeEmail(
+          { from: { name: email.from, email: '' }, subject: email.subject, date: email.date, bodyText: email.bodyFull || email.bodyPreview || '' },
+          []
+        );
+        sendLog('  📊 ' + result.category + ' | ' + result.sentiment + ' | ' + result.priority);
+        sendLog('  📝 ' + (result.summary || '').substring(0, 80));
+        attachAnalysis(eUid, result);
         analyzedCount++;
       } catch (err) {
-        sendLog(`  ⚠️ 分析失败: ${err.message}`);
+        sendLog('  ⚠️ 分析失败: ' + err.message);
       }
 
-      // 小延迟避免 API 限流
-      if (i < newEmails.length - 1) {
-        await new Promise((r) => setTimeout(r, 500));
+      if (n < newEmails.length - 1) {
+        await new Promise(function (r) { setTimeout(r, 500); });
       }
     }
 
-    sendLog(`\n✅ 完成！共分析 ${analyzedCount} 封新邮件`);
-    sendDone(true, `新增 ${newEmails.length} 封，已分析 ${analyzedCount} 封`, newEmails.length);
+    sendLog('\n✅ 完成！共分析 ' + analyzedCount + ' 封');
+    sendDone(true, '新增 ' + newEmails.length + ' 封，已分析 ' + analyzedCount + ' 封', newEmails.length);
   } catch (err) {
-    sendLog(`❌ 错误: ${err.message}`);
+    sendLog('❌ 错误: ' + err.message);
     sendDone(false, err.message, 0);
   }
 });

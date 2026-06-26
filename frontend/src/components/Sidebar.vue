@@ -2,19 +2,20 @@
   <div class="sidebar">
     <!-- 顶部操作 -->
     <div class="sidebar-actions">
-      <el-button type="primary" size="small" class="fetch-btn" @click="$emit('fetch')">
-        <el-icon><Refresh /></el-icon>
-        拉取邮件
-      </el-button>
       <el-upload
         :show-file-list="false"
         accept=".eml"
         :http-request="handleUpload"
       >
-        <el-button size="small" class="upload-btn">
+        <el-button size="small">
           <el-icon><Upload /></el-icon>
+          导入 EML
         </el-button>
       </el-upload>
+      <el-button size="small" type="danger" plain @click="$emit('clearAll')">
+        <el-icon><Delete /></el-icon>
+        清空系统
+      </el-button>
     </div>
 
     <!-- 分类导航 -->
@@ -55,7 +56,7 @@
 <script setup>
 import { computed } from 'vue';
 import {
-  Message, Setting, Refresh, Upload,
+  Message, Setting, Upload, Delete,
   Briefcase, Notification, Money, Calendar, ShoppingBag, Warning, Key,
 } from '@element-plus/icons-vue';
 
@@ -65,7 +66,7 @@ const props = defineProps({
   categoryCounts: { type: Object, default: () => ({}) },
 });
 
-const emit = defineEmits(['selectCategory', 'fetch', 'uploadEml', 'openSettings']);
+const emit = defineEmits(['selectCategory', 'fetch', 'uploadEml', 'openSettings', 'clearAll']);
 function handleUpload(req) { emit('uploadEml', req); }
 
 const categories = computed(() => [
